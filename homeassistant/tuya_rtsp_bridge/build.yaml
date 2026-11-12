@@ -3,5 +3,5 @@ build_from:
   amd64: ghcr.io/home-assistant/amd64-base-debian:bookworm
   armv7: ghcr.io/home-assistant/armv7-base-debian:bookworm
 args:
-  APP_VERSION: "1.2.6"
+  APP_VERSION: "1.2.7"
   REPO_REF: main
