@@ -51,7 +51,11 @@ def main() -> None:
             procs[cam] = subprocess.Popen(
                 [
                     str(ff), "-hide_banner", "-loglevel", "error",
-                    "-rtsp_transport", "tcp", "-i", f"rtsp://127.0.0.1:8554/{cam}/hd",
+                    "-rtsp_transport", "tcp", "-timeout", "15000000",
+                    # The RTSP description omits codec headers. Allow time for
+                    # in-band headers to arrive before opening the segment muxer.
+                    "-analyzeduration", "15000000", "-probesize", "20000000",
+                    "-i", f"rtsp://127.0.0.1:8554/{cam}/hd",
                     "-map", "0:v:0", "-c", "copy", "-an",
                     "-f", "segment", "-segment_time", str(SEG_SEC),
                     "-reset_timestamps", "1", "-strftime", "1", out,
