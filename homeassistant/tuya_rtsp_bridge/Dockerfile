@@ -6,7 +6,7 @@ ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:bookworm
 ARG REPO_URL=https://github.com/HaCStudio/tuya-rtsp-bridge.git
 ARG REPO_REF=main
 # Bump APP_VERSION on every release so Docker does not reuse a stale git clone.
-ARG APP_VERSION=1.2.7
+ARG APP_VERSION=1.2.8
 
 FROM golang:1.23-bookworm AS engine
 ARG REPO_URL

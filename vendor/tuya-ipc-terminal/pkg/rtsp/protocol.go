@@ -287,7 +287,8 @@ func (s *RTSPServer) handleOptions(client *RTSPClient, request *RTSPRequest) {
 
 func (s *RTSPServer) handleDescribe(client *RTSPClient, request *RTSPRequest) {
 	// Generate SDP for the camera stream
-	sdp := s.generateSDP(client.stream.camera, request.URL, client.stream.resolution)
+	sdp := s.generateSDP(client.stream.camera, request.URL, client.stream.resolution,
+		client.stream.webrtcBridge.rtpForwarder)
 
 	headers := map[string]string{
 		"CSeq":          strconv.Itoa(request.CSeq),
@@ -513,7 +514,7 @@ func (s *RTSPServer) handleUnsupportedMethod(client *RTSPClient, request *RTSPRe
 	sendRTSPResponse(client.conn, 501, "Not Implemented", headers, "")
 }
 
-func (s *RTSPServer) generateSDP(camera *storage.CameraInfo, baseURL string, resolution string) string {
+func (s *RTSPServer) generateSDP(camera *storage.CameraInfo, baseURL string, resolution string, forwarder *RTPForwarder) string {
 	sdp := "v=0\r\n"
 	sdp += fmt.Sprintf("o=- %d %d IN IP4 0.0.0.0\r\n", time.Now().Unix(), time.Now().Unix())
 	sdp += "s=Tuya Camera Stream\r\n"
@@ -530,43 +531,13 @@ func (s *RTSPServer) generateSDP(camera *storage.CameraInfo, baseURL string, res
 	}
 
 	audioSdp := ""
-	videoSdp := ""
-
-	// Video media description based on skill
-	if skill != nil && len(skill.Videos) > 0 {
-		if resolution == "" {
-			resolution = "hd"
-		}
-		streamType := tuya.GetStreamType(skill, resolution)
-		isHEVC := tuya.IsHEVC(skill, streamType)
-
-		var videoInfo *tuya.VideoSkill
-		for _, video := range skill.Videos {
-			if video.StreamType == streamType {
-				videoInfo = &video
-				break
-			}
-		}
-
-		if videoInfo != nil {
-			if isHEVC {
-				// H.265/HEVC
-				videoSdp += "m=video 0 RTP/AVP 96\r\n"
-				videoSdp += "a=rtpmap:96 H265/90000\r\n"
-				videoSdp += "a=fmtp:96 profile-id=1\r\n"
-			} else {
-				// H.264
-				videoSdp += "m=video 0 RTP/AVP 96\r\n"
-				videoSdp += "a=rtpmap:96 H264/90000\r\n"
-				videoSdp += "a=fmtp:96 packetization-mode=1;profile-level-id=42001e\r\n"
-			}
-		}
-	} else {
-		// Fallback in case no video stream is found
-		videoSdp += "m=video 0 RTP/AVP 96\r\n"
-		videoSdp += "a=rtpmap:96 H264/90000\r\n"
-		videoSdp += "a=fmtp:96 packetization-mode=1;profile-level-id=42001e\r\n"
+	if resolution == "" {
+		resolution = "hd"
 	}
+	hevc := skill != nil && tuya.IsHEVC(skill, tuya.GetStreamType(skill, resolution))
+	codec, fmtp := forwarder.videoDescription(hevc)
+	videoSdp := fmt.Sprintf("m=video 0 RTP/AVP %d\r\na=rtpmap:%d %s/90000\r\na=fmtp:%d %s\r\n",
+		videoPayloadType, videoPayloadType, codec, videoPayloadType, fmtp)
 
 	videoSdp += fmt.Sprintf("a=control:%s/video\r\n", baseURL)
 	videoSdp += "a=recvonly\r\n"

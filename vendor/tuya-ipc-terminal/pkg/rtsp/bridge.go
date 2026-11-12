@@ -272,7 +272,7 @@ func (wb *WebRTCBridge) setupPeerConnection(webRTCConfig *tuya.WebRTCConfig) err
 
 				switch packet.SSRC {
 				case wb.rtpForwarder.videoSSRC:
-					wb.rtpForwarder.ForwardVideoPacket(packet)
+					wb.rtpForwarder.ForwardVideoPacket(packet, wb.isHEVC)
 				case wb.rtpForwarder.audioSSRC:
 					wb.rtpForwarder.ForwardAudioPacket(packet)
 				}
@@ -482,7 +482,7 @@ func (wb *WebRTCBridge) handleVideoTrack(track *pion.TrackRemote) {
 				continue
 			}
 
-			wb.rtpForwarder.ForwardVideoPacket(packet)
+			wb.rtpForwarder.ForwardVideoPacket(packet, wb.isHEVC)
 		}
 	}
 }
