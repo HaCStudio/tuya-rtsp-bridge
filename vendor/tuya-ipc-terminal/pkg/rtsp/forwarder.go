@@ -1,10 +1,12 @@
 package rtsp
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"tuya-ipc-terminal/pkg/core"
 	"tuya-ipc-terminal/pkg/utils"
@@ -27,6 +29,10 @@ type RTPForwarder struct {
 	// RTP session info
 	videoSSRC uint32
 	audioSSRC uint32
+
+	// Video metadata is read by DESCRIBE independently of socket writes.
+	videoParametersMutex sync.RWMutex
+	videoParameters      videoParameters
 
 	// Packet count
 	firstVideoPacket bool
@@ -237,7 +243,10 @@ func (rf *RTPForwarder) AddTCPClient(sessionID string, conn net.Conn, videoRTPCh
 func (rf *RTPForwarder) RemoveClient(sessionID string) {
 	rf.mutex.Lock()
 	defer rf.mutex.Unlock()
+	rf.removeClient(sessionID)
+}
 
+func (rf *RTPForwarder) removeClient(sessionID string) {
 	if client, exists := rf.clients[sessionID]; exists {
 		if client.transportMode == TransportUDP {
 			if client.videoConn != nil {
@@ -259,16 +268,23 @@ func (rf *RTPForwarder) RemoveClient(sessionID string) {
 	}
 }
 
-func (rf *RTPForwarder) ForwardVideoPacket(packet *rtp.Packet) {
-	rf.mutex.RLock()
-	defer rf.mutex.RUnlock()
+func (rf *RTPForwarder) ForwardVideoPacket(packet *rtp.Packet, hevc bool) {
+	rf.mutex.Lock()
+	defer rf.mutex.Unlock()
+
+	rf.videoParametersMutex.Lock()
+	rf.videoParameters.observe(packet.Payload, hevc)
+	rf.videoParametersMutex.Unlock()
 
 	if len(rf.clients) == 0 {
 		return
 	}
 
-	// Serialize packet
-	data, err := packet.Marshal()
+	// The downstream RTP payload type is assigned by our SDP, independently
+	// of the type negotiated by the upstream camera.
+	outgoing := *packet
+	outgoing.PayloadType = videoPayloadType
+	data, err := outgoing.Marshal()
 	if err != nil {
 		core.Logger.Error().Err(err).Msg("Error marshaling video RTP packet")
 		return
@@ -281,7 +297,11 @@ func (rf *RTPForwarder) ForwardVideoPacket(packet *rtp.Packet) {
 		if client.transportMode == TransportUDP {
 			if client.videoConn != nil {
 				if _, err := client.videoConn.Write(data); err != nil {
-					core.Logger.Error().Err(err).Msgf("Error forwarding video packet to UDP client %s", sessionID)
+					if stopRefusedUDPTrack(client.videoConn, err) {
+						client.videoConn = nil
+					} else {
+						core.Logger.Error().Err(err).Msgf("Error forwarding video packet to UDP client %s", sessionID)
+					}
 				} else if rf.firstVideoPacket {
 					rf.firstVideoPacket = false
 					core.Logger.Trace().Msgf("Successfully sent first video packet to UDP client %s on port %d",
@@ -303,8 +323,8 @@ func (rf *RTPForwarder) ForwardVideoPacket(packet *rtp.Packet) {
 }
 
 func (rf *RTPForwarder) ForwardAudioPacket(packet *rtp.Packet) {
-	rf.mutex.RLock()
-	defer rf.mutex.RUnlock()
+	rf.mutex.Lock()
+	defer rf.mutex.Unlock()
 
 	if len(rf.clients) == 0 {
 		return
@@ -324,7 +344,11 @@ func (rf *RTPForwarder) ForwardAudioPacket(packet *rtp.Packet) {
 		if client.transportMode == TransportUDP {
 			if client.audioConn != nil {
 				if _, err := client.audioConn.Write(data); err != nil {
-					core.Logger.Error().Err(err).Msgf("Error forwarding audio packet to UDP client %s", sessionID)
+					if stopRefusedUDPTrack(client.audioConn, err) {
+						client.audioConn = nil
+					} else {
+						core.Logger.Error().Err(err).Msgf("Error forwarding audio packet to UDP client %s", sessionID)
+					}
 				} else if rf.firstAudioPacket {
 					rf.firstAudioPacket = false
 					core.Logger.Trace().Msgf("Successfully sent first audio packet to UDP client %s on port %d",
@@ -345,10 +369,25 @@ func (rf *RTPForwarder) ForwardAudioPacket(packet *rtp.Packet) {
 	}
 }
 
+// A connected UDP socket can report ICMP port unreachable on a later write.
+func stopRefusedUDPTrack(conn *net.UDPConn, err error) bool {
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 func (rf *RTPForwarder) Stop() {
+	rf.mutex.Lock()
+	defer rf.mutex.Unlock()
 	// Reset SSRCs
 	rf.videoSSRC = 0
 	rf.audioSSRC = 1
+
+	rf.videoParametersMutex.Lock()
+	rf.videoParameters = videoParameters{}
+	rf.videoParametersMutex.Unlock()
 
 	// Reset first packet flags
 	rf.firstVideoPacket = true
@@ -356,7 +395,7 @@ func (rf *RTPForwarder) Stop() {
 
 	// Clear all clients
 	for sessionID := range rf.clients {
-		rf.RemoveClient(sessionID)
+		rf.removeClient(sessionID)
 	}
 
 	core.Logger.Trace().Msg("RTPForwarder stopped and all clients cleared")
