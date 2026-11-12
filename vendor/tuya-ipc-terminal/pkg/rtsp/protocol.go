@@ -534,7 +534,6 @@ func (s *RTSPServer) generateSDP(camera *storage.CameraInfo, baseURL string, res
 		return ""
 	}
 
-	audioSdp := ""
 	if resolution == "" {
 		resolution = "hd"
 	}
@@ -546,29 +545,16 @@ func (s *RTSPServer) generateSDP(camera *storage.CameraInfo, baseURL string, res
 	videoSdp += fmt.Sprintf("a=control:%s/video\r\n", baseURL)
 	videoSdp += "a=recvonly\r\n"
 
-	// Audio media description based on skill
-	if skill != nil && len(skill.Audios) > 0 {
-		audioInfo := skill.Audios[0] // Nehme ersten audio stream
-
-		switch audioInfo.CodecType {
-		// case 101: // PCML
-		// 	audioSdp += "m=audio 0 RTP/AVP 97\r\n"
-		// 	audioSdp += "a=rtpmap:97 L16/8000\r\n"
-		case 101, 105: // PCML and PCMU
-			audioSdp += "m=audio 0 RTP/AVP 0\r\n"
-			audioSdp += "a=rtpmap:0 PCMU/8000\r\n"
-		case 106: // PCMA
-			audioSdp += "m=audio 0 RTP/AVP 8\r\n"
-			audioSdp += "a=rtpmap:8 PCMA/8000\r\n"
-		default:
-			// Fallback
-			audioSdp += "m=audio 0 RTP/AVP 0\r\n"
-			audioSdp += "a=rtpmap:0 PCMU/8000\r\n"
-		}
-	} else {
-		// Fallback in case no audio stream is found
-		audioSdp += "m=audio 0 RTP/AVP 0\r\n"
-		audioSdp += "a=rtpmap:0 PCMU/8000\r\n"
+	var audioSdp string
+	// The HEVC data channel carries camera-native PCM. H.264 uses the
+	// negotiated WebRTC audio track and keeps its existing G.711 mapping.
+	switch {
+	case codec == "H265" && forwarder.linearPCM.sampleRate > 0:
+		audioSdp = forwarder.linearPCM.sdp()
+	case skill != nil && len(skill.Audios) > 0 && skill.Audios[0].CodecType == 106:
+		audioSdp = "m=audio 0 RTP/AVP 8\r\na=rtpmap:8 PCMA/8000\r\n"
+	default:
+		audioSdp = "m=audio 0 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n"
 	}
 
 	audioSdp += fmt.Sprintf("a=control:%s/audio\r\n", baseURL)

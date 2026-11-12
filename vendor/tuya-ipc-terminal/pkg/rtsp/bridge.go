@@ -76,6 +76,7 @@ func NewWebRTCBridge(camera *storage.CameraInfo, streamResolution string, user *
 		cancel:         cancel,
 	}
 
+	wb.rtpForwarder.linearPCM = linearPCMFromSkill(camera.Skill)
 	wb.rtpForwarder.OnBackchannelAudio = wb.ForwardBackchannelAudioPacket
 
 	return wb
@@ -274,7 +275,7 @@ func (wb *WebRTCBridge) setupPeerConnection(webRTCConfig *tuya.WebRTCConfig) err
 				case wb.rtpForwarder.videoSSRC:
 					wb.rtpForwarder.ForwardVideoPacket(packet, wb.isHEVC)
 				case wb.rtpForwarder.audioSSRC:
-					wb.rtpForwarder.ForwardAudioPacket(packet)
+					wb.rtpForwarder.forwardDataChannelAudio(packet)
 				}
 			}
 		})
