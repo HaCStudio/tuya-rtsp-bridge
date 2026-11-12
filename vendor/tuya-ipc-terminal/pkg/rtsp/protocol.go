@@ -286,9 +286,13 @@ func (s *RTSPServer) handleOptions(client *RTSPClient, request *RTSPRequest) {
 }
 
 func (s *RTSPServer) handleDescribe(client *RTSPClient, request *RTSPRequest) {
-	// Generate SDP for the camera stream
-	sdp := s.generateSDP(client.stream.camera, request.URL, client.stream.resolution,
-		client.stream.webrtcBridge.rtpForwarder)
+	forwarder := client.stream.webrtcBridge.rtpForwarder
+	// The camera starts asynchronously. On a cold connection its parameter
+	// sets can arrive after DESCRIBE but before the client can receive RTP.
+	if !forwarder.waitForVideoParameters(4 * time.Second) {
+		core.Logger.Trace().Msgf("RTSP DESCRIBE proceeding without complete video parameters for session %s", client.session)
+	}
+	sdp := s.generateSDP(client.stream.camera, request.URL, client.stream.resolution, forwarder)
 
 	headers := map[string]string{
 		"CSeq":          strconv.Itoa(request.CSeq),

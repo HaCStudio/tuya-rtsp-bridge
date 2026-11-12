@@ -2,6 +2,7 @@ package rtsp
 
 import (
 	"encoding/binary"
+	"io"
 	"net"
 	"runtime"
 	"strings"
@@ -153,5 +154,82 @@ func TestRefusedUDPVideoPortLeavesAudioActive(t *testing.T) {
 	forwarder.ForwardAudioPacket(packet)
 	if _, _, err := audio.ReadFromUDP(make([]byte, 1500)); err != nil {
 		t.Fatalf("audio forwarding stopped with the video socket: %v", err)
+	}
+}
+
+func TestDescribeWaitsForColdHEVCHeaders(t *testing.T) {
+	forwarder := NewRTPForwarder()
+	defer forwarder.Stop()
+	sender, receiver := net.Pipe()
+	defer sender.Close()
+	defer receiver.Close()
+
+	server := &RTSPServer{}
+	client := &RTSPClient{
+		conn: sender,
+		stream: &CameraStream{
+			camera:       &storage.CameraInfo{Skill: "{}"},
+			resolution:   "hd",
+			webrtcBridge: &WebRTCBridge{rtpForwarder: forwarder},
+		},
+	}
+	go func() {
+		defer sender.Close()
+		server.handleDescribe(client, &RTSPRequest{URL: "rtsp://127.0.0.1/Camera/hd", CSeq: 2})
+	}()
+
+	if err := receiver.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiver.Read(make([]byte, 1)); err == nil {
+		t.Fatal("DESCRIBE replied before video headers arrived")
+	} else if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatal(err)
+	}
+
+	forwarder.ForwardVideoPacket(&rtp.Packet{Payload: []byte{64, 1, 1}}, true) // VPS
+	forwarder.ForwardVideoPacket(&rtp.Packet{Payload: []byte{68, 1, 3}}, true) // PPS
+	sendFragment := func(sequence uint16, flags, data byte) {
+		forwarder.ForwardVideoPacket(&rtp.Packet{
+			Header:  rtp.Header{SequenceNumber: sequence, Timestamp: 42},
+			Payload: []byte{98, 1, flags | 33, data},
+		}, true)
+	}
+	sendFragment(10, 0x80, 2)
+	sendFragment(12, 0x40, 3) // Lost the next fragment.
+	if forwarder.waitForVideoParameters(0) {
+		t.Fatal("a parameter set with a sequence gap was accepted")
+	}
+
+	sendFragment(13, 0x80, 2)
+	sendFragment(14, 0x40, 3)
+	if err := receiver.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	response, err := io.ReadAll(receiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(response), "sprop-vps=QAEB;sprop-sps=QgECAw==;sprop-pps=RAED") {
+		t.Fatalf("unexpected DESCRIBE response: %s", response)
+	}
+}
+
+func TestH264FragmentedParameterSet(t *testing.T) {
+	forwarder := NewRTPForwarder()
+	defer forwarder.Stop()
+	forwarder.ForwardVideoPacket(&rtp.Packet{Payload: []byte{0x68, 3}}, false)
+	forwarder.ForwardVideoPacket(&rtp.Packet{
+		Header:  rtp.Header{SequenceNumber: 65535},
+		Payload: []byte{0x7c, 0x87, 1},
+	}, false)
+	forwarder.ForwardVideoPacket(&rtp.Packet{
+		Header:  rtp.Header{SequenceNumber: 0},
+		Payload: []byte{0x7c, 0x47, 2},
+	}, false)
+
+	codec, fmtp := forwarder.videoDescription(false)
+	if codec != "H264" || !strings.Contains(fmtp, "sprop-parameter-sets=ZwEC,aAM=") {
+		t.Fatalf("unexpected video format %s %s", codec, fmtp)
 	}
 }
