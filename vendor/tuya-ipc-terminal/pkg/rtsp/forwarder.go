@@ -30,6 +30,9 @@ type RTPForwarder struct {
 	videoSSRC uint32
 	audioSSRC uint32
 
+	// Audio format for the HEVC data channel, configured before streaming.
+	linearPCM linearPCMFormat
+
 	// Video metadata is read by DESCRIBE independently of socket writes.
 	videoParametersMutex sync.RWMutex
 	videoParameters      videoParameters
