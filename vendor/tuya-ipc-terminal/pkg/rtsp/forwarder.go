@@ -33,6 +33,7 @@ type RTPForwarder struct {
 	// Video metadata is read by DESCRIBE independently of socket writes.
 	videoParametersMutex sync.RWMutex
 	videoParameters      videoParameters
+	videoParametersReady chan struct{}
 
 	// Packet count
 	firstVideoPacket bool
@@ -75,11 +76,12 @@ type RTPClient struct {
 
 func NewRTPForwarder() *RTPForwarder {
 	return &RTPForwarder{
-		clients:          make(map[string]*RTPClient),
-		videoSSRC:        0, // Default SSRC for video
-		audioSSRC:        1, // Default SSRC for audio
-		firstVideoPacket: true,
-		firstAudioPacket: true,
+		clients:              make(map[string]*RTPClient),
+		videoParametersReady: make(chan struct{}),
+		videoSSRC:            0, // Default SSRC for video
+		audioSSRC:            1, // Default SSRC for audio
+		firstVideoPacket:     true,
+		firstAudioPacket:     true,
 	}
 }
 
@@ -273,7 +275,11 @@ func (rf *RTPForwarder) ForwardVideoPacket(packet *rtp.Packet, hevc bool) {
 	defer rf.mutex.Unlock()
 
 	rf.videoParametersMutex.Lock()
-	rf.videoParameters.observe(packet.Payload, hevc)
+	wasReady := rf.videoParameters.complete()
+	rf.videoParameters.observe(packet, hevc)
+	if !wasReady && rf.videoParameters.complete() {
+		close(rf.videoParametersReady)
+	}
 	rf.videoParametersMutex.Unlock()
 
 	if len(rf.clients) == 0 {
@@ -387,6 +393,7 @@ func (rf *RTPForwarder) Stop() {
 
 	rf.videoParametersMutex.Lock()
 	rf.videoParameters = videoParameters{}
+	rf.videoParametersReady = make(chan struct{})
 	rf.videoParametersMutex.Unlock()
 
 	// Reset first packet flags
