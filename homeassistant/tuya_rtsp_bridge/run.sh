@@ -1,5 +1,4 @@
 #!/bin/bash
-# Fallback entry when bashio is absent (local docker test).
 set -euo pipefail
 
 export TUYA_BRIDGE_ROOT="${TUYA_BRIDGE_ROOT:-/app}"
@@ -12,8 +11,6 @@ export PATH="/app/bin:${PATH}"
 mkdir -p "${XDG_DATA_HOME}/tuya-rtsp-bridge" "${XDG_CONFIG_HOME}/tuya-rtsp-bridge"
 cd "${XDG_DATA_HOME}/tuya-rtsp-bridge"
 
-if command -v bashio >/dev/null 2>&1; then
-  bashio::log.info "Tuya RTSP Bridge starting (API :8787, RTSP :8554)" || true
-fi
+printf '%s\n' 'Tuya RTSP Bridge starting (API :8787, RTSP :8554)'
 
 exec python3 -u "${TUYA_BRIDGE_ROOT}/src/server.py"
